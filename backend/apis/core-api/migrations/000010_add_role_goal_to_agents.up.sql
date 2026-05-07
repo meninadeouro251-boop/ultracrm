@@ -1,0 +1,2 @@
+ALTER TABLE ultra_core_agents ADD COLUMN IF NOT EXISTS role TEXT;
+ALTER TABLE ultra_core_agents ADD COLUMN IF NOT EXISTS goal TEXT;

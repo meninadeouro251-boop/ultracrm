@@ -1,0 +1,24 @@
+[submodule "ultra-auth-service-community"]
+	path = backend/apis/auth-api
+	url = https://github.com/ultralutionAPI/ultra-auth-service-community.git
+[submodule "ultra-ai-crm-community"]
+	path = backend/apis/crm-api
+	url = https://github.com/ultralutionAPI/ultra-ai-crm-community.git
+[submodule "ultra-ai-frontend-community"]
+	path = frontend/web
+	url = https://github.com/ultralutionAPI/ultra-ai-frontend-community.git
+[submodule "ultra-ai-processor-community"]
+	path = backend/apis/processor-api
+	url = https://github.com/ultralutionAPI/ultra-ai-processor-community.git
+[submodule "ultra-ai-core-service-community"]
+	path = backend/apis/core-api
+	url = https://github.com/ultralutionAPI/ultra-ai-core-service-community.git
+[submodule "ultra-api"]
+	path = backend/apis/gateway-api
+	url = https://github.com/ultralutionAPI/ultralution-api.git
+[submodule "ultra-go"]
+	path = backend/shared/libs/ultra-go
+	url = https://github.com/ultralutionAPI/ultralution-go.git
+[submodule "ultra-bot-runtime"]
+	path = backend/workers/bot-runtime
+	url = https://github.com/ultralutionAPI/ultra-bot-runtime.git

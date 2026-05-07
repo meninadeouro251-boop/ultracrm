@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  ultralution-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    container_name: ultralution-manager-v2
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - ultralution-network
+  # Optional: Include Ultra API for complete stack
+  # Uncomment the section below if you want to run Ultra API alongside the manager
+
+  # ultralution-api:
+  #   image: ultralutionapi/ultralution-api:latest
+  #   ports:
+  #     - "8080:8080"
+  #   container_name: ultralution-api
+  #   restart: unless-stopped
+  #   environment:
+  #     - DATABASE_PROVIDER=postgresql
+  #     - DATABASE_CONNECTION_URI=postgresql://postgres:password@postgres:5432/ultralution
+  #     - AUTHENTICATION_API_KEY=your-api-key-here
+  #     - SERVER_PORT=8080
+  #   depends_on:
+  #     - postgres
+  #     - redis
+  #   networks:
+  #     - ultralution-network
+
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: ultralution-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     - POSTGRES_DB=ultralution
+  #     - POSTGRES_USER=postgres
+  #     - POSTGRES_PASSWORD=password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   networks:
+  #     - ultralution-network
+
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: ultralution-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   networks:
+  #     - ultralution-network
+
+networks:
+  ultralution-network:
+    driver: bridge
+
+# volumes:
+#   postgres_data:

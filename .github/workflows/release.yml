@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/ultralutionapi
+
+jobs:
+  build-and-push:
+    name: Build & Push ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - service: ultra-auth-api
+            context: ./backend/apis/auth-api
+            dockerfile: ./backend/apis/auth-api/Dockerfile
+          - service: ultra-crm-api
+            context: ./backend/apis/crm-api
+            dockerfile: ./backend/apis/crm-api/docker/Dockerfile
+          - service: ultra-frontend-web
+            context: ./frontend/web
+            dockerfile: ./frontend/web/Dockerfile
+          - service: ultra-processor-api
+            context: ./backend/apis/processor-api
+            dockerfile: ./backend/apis/processor-api/Dockerfile
+          - service: ultra-core-api
+            context: ./backend/apis/core-api
+            dockerfile: ./backend/apis/core-api/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  create-release:
+    name: Create GitHub Release
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Docker Images
+
+            All images are available on GitHub Container Registry:
+
+            ```bash
+            docker pull ghcr.io/ultralutionapi/ultra-auth-api:${{ github.ref_name }}
+            docker pull ghcr.io/ultralutionapi/ultra-crm-api:${{ github.ref_name }}
+            docker pull ghcr.io/ultralutionapi/ultra-frontend-web:${{ github.ref_name }}
+            docker pull ghcr.io/ultralutionapi/ultra-processor-api:${{ github.ref_name }}
+            docker pull ghcr.io/ultralutionapi/ultra-core-api:${{ github.ref_name }}
+            ```

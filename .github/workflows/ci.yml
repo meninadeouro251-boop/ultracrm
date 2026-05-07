@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Seed .env from example
+        run: cp .env.example .env
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+
+  lint-dockerfiles:
+    name: Lint Dockerfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Lint Auth Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/apis/auth-api/Dockerfile
+          failure-threshold: error
+
+      - name: Lint CRM Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/apis/crm-api/docker/Dockerfile
+          failure-threshold: error
+
+      - name: Lint Frontend Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/web/Dockerfile
+          failure-threshold: error
+
+      - name: Lint Processor Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/apis/processor-api/Dockerfile
+          failure-threshold: error
+
+      - name: Lint Core Service Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/apis/core-api/Dockerfile
+          failure-threshold: error

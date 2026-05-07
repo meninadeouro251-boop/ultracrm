@@ -1,0 +1,34 @@
+services:
+  api:
+    container_name: ultra_api
+    image: ultralution/api:local
+    build: .
+    restart: always
+    ports:
+      - 8080:8080
+    volumes:
+      - ultralution_instances:/ultralution/instances
+    networks:
+      - ultralution-net
+    env_file:
+      - .env
+    expose:
+      - 8080
+
+  frontend:
+    container_name: ultralution_frontend
+    image: ultralution/manager:local
+    build: ./ultralution-manager-v2
+    restart: always
+    ports:
+      - "3000:80"
+    networks:
+      - ultralution-net
+
+volumes:
+  ultralution_instances:
+
+networks:
+  ultralution-net:
+    name: ultralution-net
+    driver: bridge

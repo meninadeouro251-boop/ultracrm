@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  api:
+    container_name: ultra_api
+    image: ultraapicloud/ultralution-api:latest
+    restart: always
+    depends_on:
+      - redis
+      - ultralution-postgres
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ultralution_instances:/ultralution/instances
+    networks:
+      - ultralution-net
+    env_file:
+      - .env
+    expose:
+      - "8080"
+
+  frontend:
+    container_name: ultralution_frontend
+    image: ultraapicloud/ultralution-manager:latest
+    restart: always
+    ports:
+      - "3000:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
+    networks:
+      - ultralution-net
+
+  redis:
+    container_name: ultra_redis
+    image: redis:latest
+    restart: always
+    command: >
+      redis-server --port 6379 --appendonly yes
+    volumes:
+      - ultra_redis:/data
+    networks:
+      ultralution-net:
+        aliases:
+          - ultralution-redis
+    expose:
+      - "6379"
+
+  ultralution-postgres:
+    container_name: ultra_postgres
+    image: postgres:15
+    restart: always
+    env_file:
+      - .env
+    command:
+      - postgres
+      - -c
+      - max_connections=1000
+      - -c
+      - listen_addresses=*
+    environment:
+      - POSTGRES_DB=${POSTGRES_DATABASE}
+      - POSTGRES_USER=${POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ultralution-net
+    expose:
+      - "5432"
+
+volumes:
+  ultralution_instances:
+  ultra_redis:
+  postgres_data:
+
+networks:
+  ultralution-net:
+    name: ultralution-net
+    driver: bridge

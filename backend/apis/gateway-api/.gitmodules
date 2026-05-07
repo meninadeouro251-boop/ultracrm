@@ -1,0 +1,3 @@
+[submodule "ultralution-manager-v2"]
+	path = ultralution-manager-v2
+	url = https://github.com/ultralutionAPI/ultralution-manager-v2.git

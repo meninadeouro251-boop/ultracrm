@@ -1,0 +1,329 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-ultra_community}
+      POSTGRES_USER: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ultra_dev_password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USERNAME:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --requirepass ${REDIS_PASSWORD:-ultra_redis_pass} --appendonly yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-ultra_redis_pass}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailhog:
+    image: mailhog/mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  # ---------------------------------------------------------------------------
+  # Auth Service (Ruby / Rails) — Port 3001
+  # ---------------------------------------------------------------------------
+  ultra-auth:
+    build:
+      context: ./backend/apis/auth-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file: .env
+    environment:
+      RAILS_ENV: ${RAILS_ENV:-development}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ultra_redis_pass}@redis:6379/1
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "bundle install && bundle exec rails db:prepare && bundle exec rails s -p 3001 -b 0.0.0.0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  ultra-auth-sidekiq:
+    build:
+      context: ./backend/apis/auth-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RAILS_ENV: ${RAILS_ENV:-development}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ultra_redis_pass}@redis:6379/1
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "bundle install && bundle exec sidekiq"
+
+  # ---------------------------------------------------------------------------
+  # CRM Service (Ruby / Rails) — Port 3000
+  # ---------------------------------------------------------------------------
+  ultra-crm:
+    build:
+      context: ./backend/apis/crm-api
+      dockerfile: docker/Dockerfile
+      args:
+        BUNDLE_WITHOUT: ""
+        RAILS_ENV: development
+        RAILS_SERVE_STATIC_FILES: "false"
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      RAILS_ENV: ${RAILS_ENV:-development}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ultra_redis_pass}@redis:6379/0
+      POSTGRES_HOST: postgres
+      ULTRA_AUTH_BASE_URL: http://ultra-auth:3001
+      ULTRA_CRM_BASE_URL: http://ultra-crm:3000
+      ULTRA_CORE_BASE_URL: http://ultra-core:5555
+      ULTRA_GO_URL: http://ultra-go:8080
+      ULTRA_GO_API_KEY: ${ULTRA_GO_API_KEY:-ultracrm_secret_key}
+      BOT_RUNTIME_URL: http://ultra-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:-ultra-bot-runtime-dev-secret}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://ultra-crm:3000
+    volumes:
+      - ./backend/apis/crm-api:/app:delegated
+      - crm_bundle:/usr/local/bundle
+      - crm_node_modules:/app/node_modules
+      - crm_cache:/app/tmp/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ultra-auth:
+        condition: service_healthy
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  ultra-crm-sidekiq:
+    build:
+      context: ./backend/apis/crm-api
+      dockerfile: docker/Dockerfile
+      args:
+        BUNDLE_WITHOUT: ""
+        RAILS_ENV: development
+        RAILS_SERVE_STATIC_FILES: "false"
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RAILS_ENV: ${RAILS_ENV:-development}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ultra_redis_pass}@redis:6379/0
+      POSTGRES_HOST: postgres
+      ULTRA_AUTH_BASE_URL: http://ultra-auth:3001
+      ULTRA_CRM_BASE_URL: http://ultra-crm:3000
+      ULTRA_CORE_BASE_URL: http://ultra-core:5555
+      ULTRA_GO_URL: http://ultra-go:8080
+      ULTRA_GO_API_KEY: ${ULTRA_GO_API_KEY:-ultracrm_secret_key}
+      BOT_RUNTIME_URL: http://ultra-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:-ultra-bot-runtime-dev-secret}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://ultra-crm:3000
+    volumes:
+      - ./backend/apis/crm-api:/app:delegated
+      - crm_bundle:/usr/local/bundle
+      - crm_node_modules:/app/node_modules
+      - crm_cache:/app/tmp/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  # ---------------------------------------------------------------------------
+  # Core Service (Go / Gin) — Port 5555
+  # ---------------------------------------------------------------------------
+  ultra-core:
+    build:
+      context: ./backend/apis/core-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USERNAME:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-ultra_dev_password}
+      DB_NAME: ${POSTGRES_DATABASE:-ultra_community}
+      DB_SSLMODE: disable
+      PORT: "5555"
+      ULTRA_CRM_BASE_URL: http://ultra-crm:3000
+      ULTRA_AUTH_BASE_URL: http://ultra-auth:3001
+      ULTRA_PROCESSOR_BASE_URL: http://ultra-processor:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5555/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Processor Service (Python / FastAPI) — Port 8000
+  # ---------------------------------------------------------------------------
+  ultra-processor:
+    build:
+      context: ./backend/apis/processor-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      POSTGRES_CONNECTION_STRING: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD:-ultra_dev_password}@postgres:5432/${POSTGRES_DATABASE:-ultra_community}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-ultra_redis_pass}
+      REDIS_SSL: "false"
+      HOST: 0.0.0.0
+      PORT: "8000"
+      ULTRA_AUTH_BASE_URL: http://ultra-auth:3001
+      ULTRA_CRM_BASE_URL: http://ultra-crm:3000
+      ULTRA_CORE_BASE_URL: http://ultra-core:5555/api/v1
+    volumes:
+      - processor_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Bot Runtime (Go / Gin) — Port 8080
+  # ---------------------------------------------------------------------------
+  ultra-bot-runtime:
+    build:
+      context: ./backend/workers/bot-runtime
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      REDIS_URL: redis://:${REDIS_PASSWORD:-ultra_redis_pass}@redis:6379
+      ULTRA_PROCESSOR_BASE_URL: http://ultra-processor:8000
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET:-ultra-bot-runtime-dev-secret}
+    depends_on:
+      redis:
+        condition: service_healthy
+      ultra-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Frontend is in a separate profile - run with: docker compose --profile frontend up -d
+  # Or run locally: cd frontend/web && npm run dev
+  ultra-frontend:
+    profiles: ["frontend"]
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+        VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:-http://localhost:3001}
+        VITE_ULTRA_API_URL: ${VITE_ULTRA_API_URL:-http://localhost:5555}
+        VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:-http://localhost:8000}
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+      VITE_AUTH_API_URL: ${VITE_AUTH_API_URL:-http://localhost:3001}
+      VITE_WS_URL: ${VITE_WS_URL:-http://localhost:3000}
+      VITE_ULTRA_API_URL: ${VITE_ULTRA_API_URL:-http://localhost:5555}
+      VITE_AGENT_PROCESSOR_URL: ${VITE_AGENT_PROCESSOR_URL:-http://localhost:8000}
+    ports:
+      - "5173:80"
+    depends_on:
+      ultra-auth:
+        condition: service_healthy
+      ultra-crm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Ultra Go (High Performance WhatsApp API) — Port 8081
+  # Temporarily disabled due to build issues - uncomment when ready
+  # ultra-go:
+  #   build:
+  #     context: ./backend/shared/libs/ultra-go
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8081:8080"
+  #   env_file: .env
+  #   environment:
+  #     SERVER_PORT: "8080"
+  #     CLIENT_NAME: "ultracrm"
+  #     GLOBAL_API_KEY: ${ULTRA_GO_API_KEY:-ultracrm_secret_key}
+  #     POSTGRES_AUTH_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD:-ultra_dev_password}@postgres:5432/${POSTGRES_DATABASE:-ultra_community}?sslmode=disable
+  #     POSTGRES_USERS_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD:-ultra_dev_password}@postgres:5432/${POSTGRES_DATABASE:-ultra_community}?sslmode=disable
+  #     DATABASE_SAVE_MESSAGES: "true"
+  #     WADEBUG: "INFO"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  crm_bundle:
+  crm_node_modules:
+  crm_cache:
+  processor_logs:

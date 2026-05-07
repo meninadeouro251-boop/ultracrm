@@ -1,0 +1,360 @@
+# =============================================================================
+# Ultra CRM Community — Docker Swarm Stack
+# =============================================================================
+# Deploy:
+#   docker stack deploy -c docker-compose.swarm.yaml ultra_crm
+#
+# Prerequisites:
+#   - Docker Swarm initialized (docker swarm init)
+#   - External network "network_public" created
+#   - Traefik running on the swarm for TLS termination
+#
+# Only 2 public domains needed:
+#   - FRONTEND_DOMAIN  → ultra_frontend  (React app)
+#   - API_DOMAIN       → ultra_gateway   (Nginx → all backend services)
+#
+# Required environment variables (set via .env file or export):
+#   - API_DOMAIN, FRONTEND_DOMAIN
+#   - SECRET_KEY_BASE, JWT_SECRET_KEY, DOORKEEPER_JWT_SECRET_KEY
+#   - ULTRA_CRM_API_TOKEN, ENCRYPTION_KEY, BOT_RUNTIME_SECRET
+#   - POSTGRES_HOST, POSTGRES_PORT, POSTGRES_USERNAME, POSTGRES_PASSWORD, POSTGRES_DATABASE
+#   - REDIS_URL (or REDIS_HOST + REDIS_PORT + REDIS_PASSWORD)
+#   - OAUTH_REDIRECT_URI
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # API Gateway (Nginx) — single entrypoint for all backend services
+  # ---------------------------------------------------------------------------
+  ultra-gateway:
+    image: ultraapicloud/ultra-crm-gateway:latest
+    # The gateway routes to the 5 backend services by their docker service
+    # names. Defaults match the names used in this stack (ultra_auth, ultra_crm,
+    # ultra_core, ultra_processor, ultra_bot_runtime). If you rename the services
+    # in your own stack (e.g. using a different prefix), uncomment and set
+    # the matching *_UPSTREAM env var — otherwise the gateway cannot resolve
+    # them and every request returns 502. See nginx/README.md for details.
+    # environment:
+    #   AUTH_UPSTREAM: my_auth:3001
+    #   CRM_UPSTREAM: my_crm:3000
+    #   CORE_UPSTREAM: my_core:5555
+    #   PROCESSOR_UPSTREAM: my_processor:8000
+    #   BOT_RUNTIME_UPSTREAM: my_bot_runtime:8080
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.ultra-gateway.rule=Host(`${API_DOMAIN}`)
+        - traefik.http.routers.ultra-gateway.entrypoints=websecure
+        - traefik.http.routers.ultra-gateway.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.ultra-gateway.service=ultra-gateway
+        - traefik.http.services.ultra-gateway.loadbalancer.server.port=3030
+        - traefik.http.services.ultra_gateway.loadbalancer.passHostHeader=true
+
+  # ---------------------------------------------------------------------------
+  # Auth Service (Ruby / Rails) — Port 3001
+  # ---------------------------------------------------------------------------
+  ultra-auth:
+    image: ultraapicloud/ultra-auth:latest
+    command: sh -c "bundle exec rails db:migrate 2>&1 || echo 'Migration had errors, continuing...'; bundle exec rails s -p 3001 -b 0.0.0.0"
+    environment:
+      RAILS_ENV: production
+      RAILS_MAX_THREADS: 5
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ULTRA_CRM_API_TOKEN: ${ULTRA_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-ultra_community}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-require}
+      REDIS_URL: ${REDIS_URL}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      BACKEND_URL: https://${API_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-noreply@ultracrm.local}
+      SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_DOMAIN: ${SMTP_DOMAIN:-}
+      SMTP_AUTHENTICATION: ${SMTP_AUTHENTICATION:-plain}
+      SMTP_ENABLE_STARTTLS_AUTO: ${SMTP_ENABLE_STARTTLS_AUTO:-true}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: ultra-auth-service
+      MFA_ISSUER: ${MFA_ISSUER:-UltraCRM}
+      SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY:-10}
+      ACTIVE_STORAGE_SERVICE: ${ACTIVE_STORAGE_SERVICE:-local}
+
+    networks:
+      - network_public
+    stop_grace_period: 300s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  ultra-auth-sidekiq:
+    image: ultraapicloud/ultra-auth:latest
+    command: [ "bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml" ]
+    environment:
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ULTRA_CRM_API_TOKEN: ${ULTRA_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-ultra_community}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-require}
+      REDIS_URL: ${REDIS_URL}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_DOMAIN: ${SMTP_DOMAIN:-}
+      SMTP_AUTHENTICATION: ${SMTP_AUTHENTICATION:-plain}
+      SMTP_ENABLE_STARTTLS_AUTO: ${SMTP_ENABLE_STARTTLS_AUTO:-true}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: ultra-auth-service
+      MFA_ISSUER: ${MFA_ISSUER:-UltraCRM}
+      SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY:-10}
+      ACTIVE_STORAGE_SERVICE: ${ACTIVE_STORAGE_SERVICE:-local}
+    networks:
+      - network_public
+    stop_grace_period: 300s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  # ---------------------------------------------------------------------------
+  # CRM Service (Ruby / Rails) — Port 3000
+  # ---------------------------------------------------------------------------
+  ultra-crm:
+    image: ultraapicloud/ultra-crm:latest
+    command: sh -c "until wget -qO- http://ultra-auth:3001/health/live >/dev/null 2>&1; do echo 'Waiting for auth...'; sleep 5; done; bundle exec rails db:ultra_prepare 2>&1 || echo 'Migration had errors, continuing...'; bundle exec rails s -p 3000 -b 0.0.0.0"
+    environment:
+      RAILS_ENV: production
+      RAILS_SERVE_STATIC_FILES: "true"
+      RAILS_LOG_TO_STDOUT: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ULTRA_CRM_API_TOKEN: ${ULTRA_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-ultra_community}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-require}
+      REDIS_URL: ${REDIS_URL}
+      ULTRA_AUTH_SERVICE_URL: http://ultra-auth:3001
+      ULTRA_AI_CORE_SERVICE_URL: http://ultra-core:5555
+      BACKEND_URL: https://${API_DOMAIN}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      DISABLE_TELEMETRY: "true"
+      LOG_LEVEL: info
+      ENABLE_ACCOUNT_SIGNUP: "true"
+      ENABLE_PUSH_RELAY_SERVER: "true"
+      ENABLE_INBOX_EVENTS: "true"
+      BOT_RUNTIME_URL: http://ultra-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://ultra-crm:3000
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  ultra-crm-sidekiq:
+    image: ultraapicloud/ultra-crm:latest
+    command: [ "bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml" ]
+    environment:
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      ULTRA_CRM_API_TOKEN: ${ULTRA_CRM_API_TOKEN}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-ultra_community}
+      POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-require}
+      REDIS_URL: ${REDIS_URL}
+      ULTRA_AUTH_SERVICE_URL: http://ultra-auth:3001
+      ULTRA_AI_CORE_SERVICE_URL: http://ultra-core:5555
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      BOT_RUNTIME_URL: http://ultra-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://ultra-crm:3000
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  # ---------------------------------------------------------------------------
+  # Core Service (Go / Gin) — Port 5555
+  # ---------------------------------------------------------------------------
+  ultra-core:
+    image: ultraapicloud/ultra-core:latest
+    environment:
+      DB_HOST: ${POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT:-5432}
+      DB_USER: ${POSTGRES_USERNAME}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DATABASE:-ultra_community}
+      DB_SSLMODE: ${POSTGRES_SSLMODE:-require}
+      DB_MAX_IDLE_CONNS: 10
+      DB_MAX_OPEN_CONNS: 100
+      DB_CONN_MAX_LIFETIME: 1h
+      DB_CONN_MAX_IDLE_TIME: 30m
+      PORT: "5555"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ULTRA_CRM_BASE_URL: http://ultra-crm:3000
+      ULTRA_AUTH_BASE_URL: http://ultra-auth:3001
+      AI_PROCESSOR_URL: http://ultra-processor:8000
+      AI_PROCESSOR_VERSION: v1
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  # ---------------------------------------------------------------------------
+  # Processor Service (Python / FastAPI) — Port 8000
+  # ---------------------------------------------------------------------------
+  ultra-processor:
+    image: ultraapicloud/ultra-processor:latest
+    command: sh -c "alembic upgrade head 2>&1 || echo 'Alembic migration had errors, continuing...'; python -m scripts.run_seeders; uvicorn src.main:app --host $$HOST --port $$PORT"
+    environment:
+      POSTGRES_CONNECTION_STRING: ${PROCESSOR_POSTGRES_CONNECTION_STRING}
+      REDIS_HOST: ${PROCESSOR_REDIS_HOST}
+      REDIS_PORT: ${PROCESSOR_REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${PROCESSOR_REDIS_PASSWORD}
+      REDIS_SSL: "false"
+      REDIS_DB: ${PROCESSOR_REDIS_DB:-0}
+      REDIS_KEY_PREFIX: "a2a:"
+      REDIS_TTL: 3600
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEBUG: "false"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ULTRA_CRM_API_TOKEN: ${ULTRA_CRM_API_TOKEN}
+      ULTRA_AI_CRM_URL: http://ultra-crm:3000
+      CORE_SERVICE_URL: http://ultra-core:5555/api/v1
+      APP_URL: https://${API_DOMAIN}
+      API_TITLE: Agent Processor Community
+      API_DESCRIPTION: Agent Processor Community for Ultra CRM
+      API_VERSION: 1.0.0
+      API_URL: https://${API_DOMAIN}
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-Ultra CRM}
+      TOOLS_CACHE_ENABLED: "true"
+      TOOLS_CACHE_TTL: 3600
+    volumes:
+      - ultra_processor_logs:/app/logs
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  # ---------------------------------------------------------------------------
+  # Bot Runtime (Go / Gin) — Port 8080
+  # ---------------------------------------------------------------------------
+  ultra-bot-runtime:
+    image: ultraapicloud/ultra-bot-runtime:latest
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      REDIS_URL: ${REDIS_URL}
+      AI_PROCESSOR_URL: http://ultra-processor:8000
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      AI_CALL_TIMEOUT_SECONDS: 30
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+
+  # ---------------------------------------------------------------------------
+  # Frontend (React / Vite / Nginx) — Port 80
+  # ---------------------------------------------------------------------------
+  ultra-frontend:
+    image: ultraapicloud/ultra-frontend:latest
+    environment:
+      VITE_APP_ENV: production
+      VITE_API_URL: https://${API_DOMAIN}
+      VITE_AUTH_API_URL: https://${API_DOMAIN}
+      VITE_ULTRA_API_URL: https://${API_DOMAIN}
+      VITE_AGENT_PROCESSOR_URL: https://${API_DOMAIN}
+    networks:
+      - network_public
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == manager1
+      restart_policy:
+        condition: any
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - traefik.http.routers.ultra_frontend.rule=Host(`${FRONTEND_DOMAIN}`)
+        - traefik.http.routers.ultra_frontend.entrypoints=websecure
+        - traefik.http.routers.ultra_frontend.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.ultra_frontend.service=ultra_frontend
+        - traefik.http.services.ultra_frontend.loadbalancer.server.port=80
+        - traefik.http.services.ultra_frontend.loadbalancer.passHostHeader=true
+
+networks:
+  network_public:
+    external: true
+    name: network_public
+
+volumes:
+  ultra_processor_logs:
+    external: false

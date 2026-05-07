@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Environment (secrets)
+.env
+
+# Build artifacts
+*.tar.gz
+*.zip
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# IDE / Editor
+.vscode/
+.idea/
+.cursor/
+
+# AI tooling
+.gemini/
+.antigravity/
+_ultra/
+.kilo/
+
+# Scratch / temp scripts
+scratch/

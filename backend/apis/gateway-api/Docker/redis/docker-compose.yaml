@@ -1,0 +1,22 @@
+version: '3.3'
+
+services:
+  redis:
+    image: redis:latest
+    networks:
+      - ultralution-net
+    container_name: redis
+    command: >
+      redis-server --port 6379 --appendonly yes
+    volumes:
+      - ultra_redis:/data
+    ports:
+      - 6379:6379
+
+volumes:
+  ultra_redis:
+
+networks:
+  ultralution-net:
+    name: ultralution-net
+    driver: bridge
